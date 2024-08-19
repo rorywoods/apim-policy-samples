@@ -1,0 +1,52 @@
+<policies>
+    <!-- Demonstrates fetching an access token for a Google Service Account using the jwt-bearer flow -->
+    <inbound>
+        <cache-lookup-value key="google-access-token" default-value="" variable-name="googleAccessToken" caching-type="internal" />
+        <choose>
+            <when condition="@( string.IsNullOrEmpty(context.Variables.GetValueOrDefault("googleAccessToken", "")) )">
+                <!-- build jwt for jwt-bearer request -->
+                <!-- assumes the email address for the service account is in a Named Value with key "google-service-account-email-address" -->
+                <set-variable name="signedJwt" value="@{
+                    using (RSA rsa = context.Deployment.Certificates["{{google-service-account-certificate-thumbprint}}"].GetRSAPrivateKey())
+                    {
+                        long unixTimeStampInSeconds = DateTimeOffset.Now.ToUnixTimeSeconds();
+                        string header = "{\"alg\":\"RS256\",\"typ\":\"JWT\"}"; 
+                        string claimset = String.Format("{{ \"scope\": \"{{google-service-account-scopes}}\", \"aud\": \"https://oauth2.googleapis.com/token\", \"iss\": \"{{google-service-account-email-address}}\", \"iat\": {0}, \"exp\": {1} }}", unixTimeStampInSeconds, unixTimeStampInSeconds + 3599);
+                        string payload = System.Convert.ToBase64String(Encoding.UTF8.GetBytes(header)) + "." + System.Convert.ToBase64String(Encoding.UTF8.GetBytes(claimset));
+                        byte[] signature = rsa.SignData(Encoding.UTF8.GetBytes(payload), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                        return System.Net.WebUtility.UrlEncode(payload + "." + System.Convert.ToBase64String(signature));
+                    }
+                }" />
+                <!-- post token and get access code -->
+                <send-request mode="new" response-variable-name="googleAccessTokenJwt" timeout="20" ignore-error="true">
+                    <set-url>https://oauth2.googleapis.com/token</set-url>
+                    <set-method>POST</set-method>
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/x-www-form-urlencoded</value>
+                    </set-header>
+                    <set-body>@($"grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion={(string)context.Variables["signedJwt"]}")</set-body>
+                </send-request>
+                <!-- parse access token -->
+                <set-variable name="googleAccessToken" value="@( ((IResponse)context.Variables["googleAccessTokenJwt"]).Body.As<JObject>()["access_token"].ToString() )" />
+                <!-- cache access code -->
+                <cache-store-value key="google-access-token" value="@( context.Variables.GetValueOrDefault("googleAccessToken","") )" duration="3599 " />
+            </when>
+        </choose>
+        <set-header name="Authorization" exists-action="override">
+            <value>@("Bearer " + context.Variables.GetValueOrDefault("googleAccessToken","") )</value>
+        </set-header>
+        <base />
+    </inbound>
+    <!-- Control if and how the requests are forwarded to services  -->
+    <backend>
+        <base />
+    </backend>
+    <!-- Customize the responses -->
+    <outbound>
+        <base />
+    </outbound>
+    <!-- Handle exceptions and customize error responses  -->
+    <on-error>
+        <base />
+    </on-error>
+</policies>
