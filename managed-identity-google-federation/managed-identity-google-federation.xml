@@ -1,0 +1,58 @@
+<!--
+    - Policies are applied in the order they appear.
+    - Position <base/> inside a section to inherit policies from the outer scope.
+    - Comments within policies are not preserved.
+-->
+<!-- Add policies as children to the <inbound>, <outbound>, <backend>, and <on-error> elements -->
+<policies>
+    <!-- Throttle, authorize, validate, cache, or transform the requests -->
+    <inbound>
+        <!-- <cache-remove-value key="google-access-token" /> -->
+        <cache-lookup-value key="google-access-token" default-value="" variable-name="googleAccessToken" caching-type="internal" />
+        <choose>
+            <when condition="@( string.IsNullOrEmpty(context.Variables.GetValueOrDefault("googleAccessToken", "")) )">
+                <!-- build jwt for jwt-bearer request -->
+                <authentication-managed-identity resource="{{app-registration-appid-uri}}" output-token-variable-name="entra-jwt" ignore-error="false" />
+                <set-variable name="requestBody" value="@{
+                    string requestBody = "audience=//iam.googleapis.com/projects/{{gcp-project-name}}/locations/global/workloadIdentityPools/{{gcp-pool-id}}/providers/{{gcp-provider-id}}";
+                    requestBody = requestBody + "&grant_type=urn:ietf:params:oauth:grant-type:token-exchange";
+                    requestBody = requestBody + "&requested_token_type=urn:ietf:params:oauth:token-type:access_token";
+                    requestBody = requestBody + "&scope=https://www.googleapis.com/auth/cloud-platform";
+                    requestBody = requestBody + "&subject_token_type=urn:ietf:params:oauth:token-type:jwt";
+                    requestBody = requestBody + "&subject_token=" + context.Variables.GetValueOrDefault("entra-jwt","");
+
+                    return requestBody;
+                }" />
+                <!-- exchange Entra ID token for a Google token -->
+                <send-request mode="new" response-variable-name="googleAccessTokenResponse" timeout="20" ignore-error="true">
+                    <set-url>https://sts.googleapis.com/v1/token</set-url>
+                    <set-method>POST</set-method>
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/x-www-form-urlencoded</value>
+                    </set-header>
+                    <set-body>@((string)context.Variables["requestBody"])</set-body>
+                </send-request>
+                <!-- parse access token -->
+                <set-variable name="googleAccessToken" value="@( ((IResponse)context.Variables["googleAccessTokenResponse"]).Body.As<JObject>()["access_token"].ToString() )" />
+                <!-- cache access code -->
+                <cache-store-value key="google-access-token" value="@( context.Variables.GetValueOrDefault("googleAccessToken","") )" duration="3599 " />
+            </when>
+        </choose>
+        <set-header name="Authorization" exists-action="override">
+            <value>@("Bearer " + context.Variables.GetValueOrDefault("googleAccessToken","") )</value>
+        </set-header>
+        <base />
+    </inbound>
+    <!-- Control if and how the requests are forwarded to services  -->
+    <backend>
+        <base />
+    </backend>
+    <!-- Customize the responses -->
+    <outbound>
+        <base />
+    </outbound>
+    <!-- Handle exceptions and customize error responses  -->
+    <on-error>
+        <base />
+    </on-error>
+</policies>
