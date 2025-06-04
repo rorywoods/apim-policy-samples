@@ -1,4 +1,4 @@
-## Use orkload Identity Federation to avoid a service account certificate
+## Use Workload Identity Federation to avoid a service account certificate
 Making a service to service call to a GCP endpoint requires use of a service account. Instead of requiring a service account certificate, exchange a token from Entra ID for a Google Identity access token. 
 
 This policy demonstrates using policy expressions to conduct the exchange.
